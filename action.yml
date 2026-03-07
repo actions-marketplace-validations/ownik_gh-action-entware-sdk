@@ -1,0 +1,99 @@
+name: "Entware SDK"
+description: "Build Entware packages via the SDK"
+author: ownik
+runs:
+  using: 'composite'
+  steps:
+    - run: |
+        echo "artifacts_dir=${ARTIFACTS_DIR:-$GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+        echo "feed_dir=${FEED_DIR:-$GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+        echo "docker_image=${DOCKER_IMAGE:-ghcr.io/openwrt/buildbot/buildworker-v3.11.3:latest}" >> "$GITHUB_OUTPUT"
+      id: inputs
+      shell: bash
+
+    - name: Temporary changes rights for artifacts and feed folders
+      run: sudo chown -R 1000:1000 ${{ steps.inputs.outputs.artifacts_dir }} ${{ steps.inputs.outputs.feed_dir }}
+      shell: bash
+
+    - name: Pull builder docker image
+      run: docker pull ${{ steps.inputs.outputs.docker_image }} 
+      shell: bash
+
+    - id: release-info
+      name: Fetch latest sdk url
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ github.token }}
+        retries: 3
+        script: |
+          const arch = process.env.ARCH;
+          const owner = 'ownik';
+          const repo = 'entware-sdk';
+          const latestRelease = await github.rest.repos.getLatestRelease({
+            owner, repo
+          })
+          const sdkAsset = latestRelease.data.assets.filter((item) => 
+            item.name.includes(arch) && !item.name.endsWith(".sha256") 
+          )[0];
+          sdkAsset.digest = sdkAsset.digest.replace('sha256:', '')
+          const cacheKey = `${sdkAsset.name}-${latestRelease.data.name}-${sdkAsset.digest}`
+          const version = latestRelease.data.name;
+          const sdkDownloadPath = `${{ runner.temp }}/sdk-${arch}-version.tar.zst`;
+          return {
+            sdkUrl: sdkAsset.browser_download_url,
+            sha256: sdkAsset.digest,
+            version,
+            cacheKey,
+            sdkDownloadPath,
+          };
+
+    - name: Restore sdk.tar.zst from cache
+      id: cache-sdk
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ fromJSON(steps.release-info.outputs.result).sdkDownloadPath }}
+        key: ${{ fromJSON(steps.release-info.outputs.result).cacheKey }}
+
+    - name: Download sdk ${{ fromJSON(steps.release-info.outputs.result).sdkUrl }}
+      if: steps.cache-sdk.outputs.cache-hit != 'true'
+      run: wget -O ${{ fromJSON(steps.release-info.outputs.result).sdkDownloadPath }} ${{ fromJSON(steps.release-info.outputs.result).sdkUrl }}
+      shell: bash
+    
+    - name: Save sdk.tar.zst to cache
+      if: steps.cache-sdk.outputs.cache-hit != 'true'
+      id: cache-sdk-save
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ fromJSON(steps.release-info.outputs.result).sdkDownloadPath }}
+        key: ${{ fromJSON(steps.release-info.outputs.result).cacheKey }}
+
+    - name: Verify sdk
+      run: |
+        DIGEST=${{ fromJSON(steps.release-info.outputs.result).sha256 }}
+        echo "$DIGEST ${{ fromJSON(steps.release-info.outputs.result).sdkDownloadPath }}" | sha256sum --check
+      shell: bash
+
+    - name: Build packages
+      run: >-
+        docker run --rm 
+        --env BUILD_LOG 
+        --env EXTRA_FEEDS 
+        --env FEEDNAME 
+        --env IGNORE_ERRORS 
+        --env PACKAGES 
+        --env V 
+        -v $GITHUB_ACTION_PATH/entrypoint.sh:/bin/entrypoint:ro
+        -v ${{ fromJSON(steps.release-info.outputs.result).sdkDownloadPath }}:/sdk/sdk.tar.zst:ro
+        -v ${{ steps.inputs.outputs.artifacts_dir }}:/artifacts 
+        -v ${{ steps.inputs.outputs.feed_dir }}:/feed 
+        -w /builder
+        ${{ steps.inputs.outputs.docker_image }}
+        /bin/entrypoint   
+      shell: bash   
+      
+    - name: Restore rights for artifacts and feed folders
+      run: |
+        sudo chown -R --reference=${{ steps.inputs.outputs.artifacts_dir }}/.. ${{ steps.inputs.outputs.artifacts_dir }}
+        sudo chown -R --reference=${{ steps.inputs.outputs.feed_dir }}/.. ${{ steps.inputs.outputs.feed_dir }}
+      if: always()
+      shell: bash

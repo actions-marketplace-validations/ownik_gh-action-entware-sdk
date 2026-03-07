@@ -7,7 +7,7 @@ runs:
     - run: |
         echo "artifacts_dir=${ARTIFACTS_DIR:-$GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
         echo "feed_dir=${FEED_DIR:-$GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
-        echo "docker_image=${DOCKER_IMAGE:-ghcr.io/openwrt/buildbot/buildworker-v3.11.3:latest}" >> "$GITHUB_OUTPUT"
+        echo "container=${CONTAINER:-ghcr.io/openwrt/buildbot/buildworker-v3.11.3:latest}" >> "$GITHUB_OUTPUT"
       id: inputs
       shell: bash
 
@@ -16,7 +16,7 @@ runs:
       shell: bash
 
     - name: Pull builder docker image
-      run: docker pull ${{ steps.inputs.outputs.docker_image }} 
+      run: docker pull ${{ steps.inputs.outputs.container }} 
       shell: bash
 
     - id: release-info
@@ -87,7 +87,7 @@ runs:
         -v ${{ steps.inputs.outputs.artifacts_dir }}:/artifacts 
         -v ${{ steps.inputs.outputs.feed_dir }}:/feed 
         -w /builder
-        ${{ steps.inputs.outputs.docker_image }}
+        ${{ steps.inputs.outputs.container }}
         /bin/entrypoint   
       shell: bash   
       
